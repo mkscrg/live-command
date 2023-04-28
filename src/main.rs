@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Error};
+use std::io::BufRead;
 use std::sync::mpsc;
-use std::thread;
 
 fn main() -> Result<(), Error> {
     let (base, prompt) = parse_args()?;
@@ -12,7 +12,7 @@ fn main() -> Result<(), Error> {
     let mut runner = Runner { base, rx, printer };
     let interceptor = Interceptor { tx };
 
-    thread::spawn(move || runner.run());
+    std::thread::spawn(move || runner.run().unwrap());
     readline.set_helper(Some(interceptor));
 
     let mut latest = String::new();
@@ -48,25 +48,54 @@ pub struct Runner<P> {
     printer: P,
 }
 
-// TODO what happens when this crashes
+// naturally prints on panic, then the main thread panics on next send
 impl<P: rustyline::ExternalPrinter> Runner<P> {
-    fn run(&mut self) {
-        let mut last_args = Vec::new();
+    const RESET: &str = "\x1B[2J\x1B[1;1H";
+
+    fn run(&mut self) -> Result<(), Error> {
+        let mut args = Vec::new();
 
         while let Ok(next_args) = self.rx.recv() {
-            if next_args != last_args {
-                self.printer
-                    .print(format!(
-                        "\x1B[2J\x1B[1;1Hwould run: {} {} {}",
-                        shell_words::quote(&self.base.program),
-                        shell_words::join(&self.base.args),
-                        shell_words::join(&next_args),
-                    ))
-                    .unwrap();
-                // TODO actually run commands
+            if next_args != args {
+                args = next_args;
+
+                // TODO interleave stdout + stderr?
+                let output = std::process::Command::new(&self.base.program)
+                    .args(&self.base.args)
+                    .args(&args)
+                    .output()?;
+
+                let mut screen_reset = true;
+                self.print_out(&output.stderr, &mut screen_reset)?;
+                self.print_out(&output.stdout, &mut screen_reset)?;
+                if screen_reset {
+                    self.printer.print(String::from(Self::RESET))?;
+                }
             }
-            last_args = next_args;
         }
+
+        Ok(())
+    }
+
+    fn print_out(&mut self, out: &[u8], reset: &mut bool) -> Result<(), Error> {
+        for res_line in std::io::Cursor::new(out).lines() {
+            let reset_prefix = if *reset {
+                *reset = false;
+                Self::RESET
+            } else {
+                ""
+            };
+
+            match res_line {
+                Ok(line) => {
+                    self.printer.print(format!("{}{}", reset_prefix, line))?;
+                }
+                Err(err) => {
+                    self.printer.print(format!("{}cursor.lines() error: {}", reset_prefix, err))?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
