@@ -4,7 +4,7 @@ use std::thread;
 
 fn main() -> Result<(), Error> {
     let (base, prompt) = parse_args()?;
-    let (tx, rx) = mpsc::channel::<String>();
+    let (tx, rx) = mpsc::channel::<Vec<String>>();
 
     let mut readline = rustyline::Editor::new()?;
     let printer = readline.create_external_printer()?;
@@ -21,12 +21,7 @@ fn main() -> Result<(), Error> {
     }
 }
 
-//// arg parsing
-
-struct CommandBase {
-    program: String,
-    args: Vec<String>,
-}
+//// parse command and invariant args from ARGV
 
 fn parse_args() -> Result<(CommandBase, String), Error> {
     let mut argv = std::env::args();
@@ -35,38 +30,42 @@ fn parse_args() -> Result<(CommandBase, String), Error> {
     let program = argv.next().ok_or_else(|| anyhow!("missing argv[1]"))?;
     let args: Vec<String> = argv.collect();
 
-    // TODO drops quotes from cli, not ideal
-    let prompt = format!("> {} {} ", &program, &args.join(" "));
+    let prompt = format!("> {} {}", shell_words::quote(&program), shell_words::join(&args));
 
     Ok((CommandBase { program, args }, prompt))
+}
+
+struct CommandBase {
+    program: String,
+    args: Vec<String>,
 }
 
 //// background runner
 
 pub struct Runner<P> {
     base: CommandBase,
-    rx: mpsc::Receiver<String>,
+    rx: mpsc::Receiver<Vec<String>>,
     printer: P,
 }
 
 // TODO what happens when this crashes
 impl<P: rustyline::ExternalPrinter> Runner<P> {
     fn run(&mut self) {
-        let mut last_line = String::new();
+        let mut last_args = Vec::new();
 
-        while let Ok(next_line) = self.rx.recv() {
-            if next_line != last_line {
+        while let Ok(next_args) = self.rx.recv() {
+            if next_args != last_args {
                 self.printer
                     .print(format!(
                         "\x1B[2J\x1B[1;1Hwould run: {} {} {}",
-                        &self.base.program,
-                        &self.base.args.join(" "),
-                        next_line
+                        shell_words::quote(&self.base.program),
+                        shell_words::join(&self.base.args),
+                        shell_words::join(&next_args),
                     ))
                     .unwrap();
                 // TODO actually run commands
             }
-            last_line = next_line;
+            last_args = next_args;
         }
     }
 }
@@ -74,16 +73,20 @@ impl<P: rustyline::ExternalPrinter> Runner<P> {
 //// readline interceptor
 
 struct Interceptor {
-    tx: mpsc::Sender<String>,
+    tx: mpsc::Sender<Vec<String>>,
 }
 
 impl rustyline::hint::Hinter for Interceptor {
-    // TODO parse args here, hint on open quotes, send only well-formed
     type Hint = String;
 
     fn hint(&self, line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
-        self.tx.send(String::from(line)).unwrap();
-        None
+        match shell_words::split(line) {
+            Ok(args) => {
+                self.tx.send(args).unwrap();
+                None
+            }
+            Err(parse_err) => Some(format!("  ({})", parse_err))
+        }
     }
 }
 
