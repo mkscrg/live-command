@@ -91,5 +91,13 @@ impl rustyline::completion::Completer for Interceptor {
     type Candidate = String;
 }
 impl rustyline::highlight::Highlighter for Interceptor {}
-impl rustyline::validate::Validator for Interceptor {}
+impl rustyline::validate::Validator for Interceptor {
+// this doesn't work great, TODO investigate
+//    fn validate(
+//        &self,
+//        _ctx: &mut rustyline::validate::ValidationContext<'_>,
+//    ) -> rustyline::Result<rustyline::validate::ValidationResult> {
+//        Ok(rustyline::validate::ValidationResult::Invalid(None))
+//    }
+}
 impl rustyline::Helper for Interceptor {}
