@@ -2,8 +2,6 @@ use anyhow::{anyhow, Error};
 use std::io::BufRead;
 use std::sync::mpsc;
 
-// TODO implement placeholder
-
 fn main() -> Result<(), Error> {
     let (base, prompt) = parse_args()?;
     let (tx, rx) = mpsc::channel::<Vec<String>>();
